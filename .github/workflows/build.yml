@@ -42,15 +42,118 @@ jobs:
         run: |
           $targetUrl = '${{ inputs.url }}'
           $main = @"
-          const { app, BrowserWindow } = require('electron')
+          const { app, BrowserWindow, Menu } = require('electron')
+
           app.whenReady().then(() => {
+            Menu.setApplicationMenu(null)
+
             const win = new BrowserWindow({
               width: 1280,
               height: 800,
-              webPreferences: { nodeIntegration: false }
+              webPreferences: {
+                nodeIntegration: false,
+                contextIsolation: true,
+              }
             })
+
+            win.webContents.on('did-start-loading', () => {
+              win.webContents.executeJavaScript(\`
+                (function() {
+                  if (document.getElementById('__pb__')) return
+
+                  const wrap = document.createElement('div')
+                  wrap.id = '__pb__'
+                  wrap.style.cssText = [
+                    'position:fixed','top:0','left:0',
+                    'width:100%','height:4px',
+                    'z-index:2147483647',
+                    'pointer-events:none',
+                    'background:transparent',
+                  ].join(';')
+
+                  const bar = document.createElement('div')
+                  bar.id = '__pb_bar__'
+                  bar.style.cssText = [
+                    'height:4px',
+                    'width:0%',
+                    'border-radius:0 4px 4px 0',
+                    'background:#3B82F6',
+                    'box-shadow:0 0 10px rgba(59,130,246,0.6)',
+                    'transition:width 0.3s cubic-bezier(0.4,0,0.2,1),background 0.8s ease,box-shadow 0.8s ease',
+                  ].join(';')
+
+                  wrap.appendChild(bar)
+                  document.documentElement.appendChild(wrap)
+
+                  let progress = 0
+                  window.__pbTimer__ = setInterval(() => {
+                    if (progress < 85) {
+                      const step = progress < 30 ? 6 : progress < 60 ? 3 : 0.8
+                      progress += Math.random() * step
+                      progress = Math.min(progress, 85)
+                      bar.style.width = progress + '%'
+
+                      const blue  = [59, 130, 246]
+                      const green = [34, 197, 94]
+                      const t = Math.min(progress / 85, 1)
+                      const r = Math.round(blue[0] + (green[0]-blue[0]) * t)
+                      const g = Math.round(blue[1] + (green[1]-blue[1]) * t)
+                      const b = Math.round(blue[2] + (green[2]-blue[2]) * t)
+                      const color = 'rgb('+r+','+g+','+b+')'
+                      bar.style.background = color
+                      bar.style.boxShadow  = '0 0 10px rgba('+r+','+g+','+b+',0.65)'
+                    }
+                  }, 180)
+                })()
+              \`).catch(() => {})
+            })
+
+            win.webContents.on('did-finish-load', () => {
+              win.webContents.executeJavaScript(\`
+                (function() {
+                  const bar = document.getElementById('__pb_bar__')
+                  if (!bar) return
+                  clearInterval(window.__pbTimer__)
+                  bar.style.transition = 'width 0.25s ease,background 0.3s ease,box-shadow 0.3s ease,opacity 0.4s ease 0.35s'
+                  bar.style.width      = '100%'
+                  bar.style.background = '#22C55E'
+                  bar.style.boxShadow  = '0 0 12px rgba(34,197,94,0.7)'
+                  setTimeout(() => {
+                    bar.style.opacity = '0'
+                    setTimeout(() => {
+                      const wrap = document.getElementById('__pb__')
+                      if (wrap) wrap.remove()
+                    }, 450)
+                  }, 350)
+                })()
+              \`).catch(() => {})
+            })
+
+            win.webContents.on('did-fail-load', () => {
+              win.webContents.executeJavaScript(\`
+                (function() {
+                  const bar = document.getElementById('__pb_bar__')
+                  if (!bar) return
+                  clearInterval(window.__pbTimer__)
+                  bar.style.transition = 'width 0.2s ease,background 0.2s ease,opacity 0.4s ease 0.8s'
+                  bar.style.width      = '100%'
+                  bar.style.background = '#EF4444'
+                  bar.style.boxShadow  = '0 0 10px rgba(239,68,68,0.7)'
+                  setTimeout(() => {
+                    bar.style.opacity = '0'
+                    setTimeout(() => {
+                      const wrap = document.getElementById('__pb__')
+                      if (wrap) wrap.remove()
+                    }, 450)
+                  }, 900)
+                })()
+              \`).catch(() => {})
+            })
+
             win.loadURL('$targetUrl')
           })
+
+          app.on('window-all-closed', () => app.quit())
           "@
           Set-Content -Path main.js -Value $main -Encoding UTF8
 
@@ -60,14 +163,10 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path build | Out-Null
           $url = '${{ inputs.icon_url }}'
-
-          # 下载到临时文件
           $tmpFile = 'build/icon_tmp'
           Invoke-WebRequest -Uri $url -OutFile $tmpFile
 
-          # 读取 magic bytes 判断真实格式，不依赖 URL 后缀
           $bytes = [System.IO.File]::ReadAllBytes($tmpFile)
-
           if ($bytes[0] -eq 0x89 -and $bytes[1] -eq 0x50 -and $bytes[2] -eq 0x4E -and $bytes[3] -eq 0x47) {
             Write-Host "检测到 PNG 格式"
             Move-Item -Force $tmpFile 'build/icon.png'
@@ -78,7 +177,6 @@ jobs:
             Write-Host "未知格式，按 PNG 处理"
             Move-Item -Force $tmpFile 'build/icon.png'
           }
-
           Get-ChildItem build
 
       - name: Generate package.json
