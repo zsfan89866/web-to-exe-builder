@@ -60,27 +60,38 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path build | Out-Null
           $url = '${{ inputs.icon_url }}'
-          if ($url -match '\.png(\?.*)?$') {
-            Invoke-WebRequest -Uri $url -OutFile 'build/icon.png'
+
+          # 下载到临时文件
+          $tmpFile = 'build/icon_tmp'
+          Invoke-WebRequest -Uri $url -OutFile $tmpFile
+
+          # 读取 magic bytes 判断真实格式，不依赖 URL 后缀
+          $bytes = [System.IO.File]::ReadAllBytes($tmpFile)
+
+          if ($bytes[0] -eq 0x89 -and $bytes[1] -eq 0x50 -and $bytes[2] -eq 0x4E -and $bytes[3] -eq 0x47) {
+            Write-Host "检测到 PNG 格式"
+            Move-Item -Force $tmpFile 'build/icon.png'
+          } elseif ($bytes[0] -eq 0x00 -and $bytes[1] -eq 0x00 -and $bytes[2] -eq 0x01 -and $bytes[3] -eq 0x00) {
+            Write-Host "检测到 ICO 格式"
+            Move-Item -Force $tmpFile 'build/icon.ico'
           } else {
-            Invoke-WebRequest -Uri $url -OutFile 'build/icon.ico'
+            Write-Host "未知格式，按 PNG 处理"
+            Move-Item -Force $tmpFile 'build/icon.png'
           }
+
+          Get-ChildItem build
 
       - name: Generate package.json
         shell: pwsh
         run: |
-          # productName 保留原始中文名（用户看到的）
           $productName = '${{ inputs.app_name }}'
           $version     = '${{ inputs.version }}'
 
-          # name / executableName 只保留英文数字和连字符（electron-builder 要求）
           $safeName = $productName -replace '[^a-zA-Z0-9\-]', '-'
           $safeName = $safeName.ToLower().Trim('-')
-          # 如果全是中文导致 safeName 为空，给一个默认值
           if ([string]::IsNullOrWhiteSpace($safeName) -or $safeName -eq '-') {
             $safeName = 'myapp'
           }
-          # 连续多个 - 合并成一个
           $safeName = $safeName -replace '-{2,}', '-'
           $safeName = $safeName.Trim('-')
 
@@ -88,7 +99,6 @@ jobs:
           Write-Host "safeName    : $safeName"
           Write-Host "version     : $version"
 
-          # 用 ConvertTo-Json 确保 productName 中文被正确转义
           $config = [ordered]@{
             name    = $safeName
             version = $version
@@ -104,7 +114,6 @@ jobs:
             scripts = @{ dist = "electron-builder --win" }
           }
           $config | ConvertTo-Json -Depth 10 | Set-Content -Path package.json -Encoding UTF8
-          # 验证生成结果
           Get-Content package.json
 
       - name: Build EXE
@@ -124,6 +133,6 @@ jobs:
       - name: Print artifact info
         shell: pwsh
         run: |
-          Write-Host "task_id  : ${{ inputs.task_id }}"
-          Write-Host "run_id   : ${{ github.run_id }}"
+          Write-Host "task_id : ${{ inputs.task_id }}"
+          Write-Host "run_id  : ${{ github.run_id }}"
           Get-ChildItem dist
