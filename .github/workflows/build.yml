@@ -183,35 +183,53 @@ jobs:
         shell: pwsh
         run: |
           $productName = '${{ inputs.app_name }}'
-          $version     = '${{ inputs.version }}'
+          $rawVersion  = '${{ inputs.version }}'
+
+          # 去掉开头的 v/V
+          $rawVersion = $rawVersion -replace '^[vV]+', ''
+          # 只保留数字和点
+          $rawVersion = $rawVersion -replace '[^0-9.]', ''
+          # 去掉首尾的点
+          $rawVersion = $rawVersion.Trim('.')
+          # 用 [char]'.' 分割，避免转义问题
+          $parts = $rawVersion.Split([char]'.') | Where-Object { $_ -ne '' }
+          # 补全到三段
+          while ($parts.Count -lt 3) { $parts += @('0') }
+          $version = $parts[0] + '.' + $parts[1] + '.' + $parts[2]
+
+          Write-Host "原始版本号: $rawVersion"
+          Write-Host "修正版本号: $version"
 
           $safeName = $productName -replace '[^a-zA-Z0-9\-]', '-'
           $safeName = $safeName.ToLower().Trim('-')
-          if ([string]::IsNullOrWhiteSpace($safeName) -or $safeName -eq '-') {
+          if ([string]::IsNullOrWhiteSpace($safeName) -or $safeName -match '^-+$') {
             $safeName = 'myapp'
           }
           $safeName = $safeName -replace '-{2,}', '-'
           $safeName = $safeName.Trim('-')
 
-          Write-Host "productName : $productName"
-          Write-Host "safeName    : $safeName"
-          Write-Host "version     : $version"
+          Write-Host "productName: $productName"
+          Write-Host "safeName   : $safeName"
 
-          $config = [ordered]@{
-            name    = $safeName
-            version = $version
-            main    = "main.js"
-            build   = [ordered]@{
-              appId       = "com.webtoexe.$safeName"
-              productName = $productName
-              win         = [ordered]@{
-                target         = "portable"
-                executableName = $safeName
+          $json = @"
+          {
+            "name": "$safeName",
+            "version": "$version",
+            "main": "main.js",
+            "build": {
+              "appId": "com.webtoexe.$safeName",
+              "productName": "$productName",
+              "win": {
+                "target": "portable",
+                "executableName": "$safeName"
               }
+            },
+            "scripts": {
+              "dist": "electron-builder --win"
             }
-            scripts = @{ dist = "electron-builder --win" }
           }
-          $config | ConvertTo-Json -Depth 10 | Set-Content -Path package.json -Encoding UTF8
+          "@
+          Set-Content -Path package.json -Value $json -Encoding UTF8
           Get-Content package.json
 
       - name: Build EXE
