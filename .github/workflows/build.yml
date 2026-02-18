@@ -1,0 +1,109 @@
+name: Build EXE
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: '目标网址'
+        required: true
+      app_name:
+        description: '应用名称'
+        required: true
+      version:
+        description: '版本号'
+        required: true
+        default: '1.0.0'
+      icon_url:
+        description: '图标 URL（可为空）'
+        required: false
+        default: ''
+      task_id:
+        description: '任务 ID（CF Workers 用）'
+        required: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Init project
+        shell: pwsh
+        run: |
+          npm init -y
+          npm install electron electron-builder --save-dev
+
+      - name: Generate main.js
+        shell: pwsh
+        run: |
+          $main = @"
+          const { app, BrowserWindow } = require('electron')
+          app.whenReady().then(() => {
+            const win = new BrowserWindow({
+              width: 1280,
+              height: 800,
+              webPreferences: { nodeIntegration: false }
+            })
+            win.loadURL('${{ inputs.url }}')
+          })
+          "@
+          Set-Content -Path main.js -Value $main
+
+      - name: Download custom icon
+        if: ${{ inputs.icon_url != '' }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          $url = '${{ inputs.icon_url }}'
+          if ($url -match '\.png(\?.*)?$') {
+            Invoke-WebRequest -Uri $url -OutFile 'build/icon.png'
+          } else {
+            Invoke-WebRequest -Uri $url -OutFile 'build/icon.ico'
+          }
+
+      - name: Generate package.json
+        shell: pwsh
+        run: |
+          $appName = '${{ inputs.app_name }}'
+          $version = '${{ inputs.version }}'
+          $pkg = @"
+          {
+            "name": "$appName",
+            "version": "$version",
+            "main": "main.js",
+            "build": {
+              "appId": "com.webtoexe.$appName",
+              "productName": "$appName",
+              "win": {
+                "target": "portable",
+                "executableName": "$appName"
+              }
+            },
+            "scripts": {
+              "dist": "electron-builder --win"
+            }
+          }
+          "@
+          Set-Content -Path package.json -Value $pkg
+
+      - name: Build EXE
+        shell: pwsh
+        run: |
+          npx electron-builder --win --x64
+
+      - name: Upload EXE as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: exe-${{ inputs.task_id }}
+          path: dist/*.exe
+          if-no-files-found: error
+
+      - name: Print artifact info
+        shell: pwsh
+        run: |
+          Write-Host "Task ID: ${{ inputs.task_id }}"
+          Write-Host "GitHub run id: ${{ github.run_id }}"
