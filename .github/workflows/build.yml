@@ -7,7 +7,7 @@ on:
         description: '目标网址'
         required: true
       app_name:
-        description: '应用名称'
+        description: '应用名称（支持中文）'
         required: true
       version:
         description: '版本号'
@@ -18,7 +18,7 @@ on:
         required: false
         default: ''
       task_id:
-        description: '任务 ID（CF Workers 用）'
+        description: '任务 ID'
         required: true
 
 jobs:
@@ -40,6 +40,7 @@ jobs:
       - name: Generate main.js
         shell: pwsh
         run: |
+          $targetUrl = '${{ inputs.url }}'
           $main = @"
           const { app, BrowserWindow } = require('electron')
           app.whenReady().then(() => {
@@ -48,10 +49,10 @@ jobs:
               height: 800,
               webPreferences: { nodeIntegration: false }
             })
-            win.loadURL('${{ inputs.url }}')
+            win.loadURL('$targetUrl')
           })
           "@
-          Set-Content -Path main.js -Value $main
+          Set-Content -Path main.js -Value $main -Encoding UTF8
 
       - name: Download custom icon
         if: ${{ inputs.icon_url != '' }}
@@ -68,32 +69,50 @@ jobs:
       - name: Generate package.json
         shell: pwsh
         run: |
-          $appName = '${{ inputs.app_name }}'
-          $version = '${{ inputs.version }}'
-          $pkg = @"
-          {
-            "name": "$appName",
-            "version": "$version",
-            "main": "main.js",
-            "build": {
-              "appId": "com.webtoexe.$appName",
-              "productName": "$appName",
-              "win": {
-                "target": "portable",
-                "executableName": "$appName"
-              }
-            },
-            "scripts": {
-              "dist": "electron-builder --win"
-            }
+          # productName 保留原始中文名（用户看到的）
+          $productName = '${{ inputs.app_name }}'
+          $version     = '${{ inputs.version }}'
+
+          # name / executableName 只保留英文数字和连字符（electron-builder 要求）
+          $safeName = $productName -replace '[^a-zA-Z0-9\-]', '-'
+          $safeName = $safeName.ToLower().Trim('-')
+          # 如果全是中文导致 safeName 为空，给一个默认值
+          if ([string]::IsNullOrWhiteSpace($safeName) -or $safeName -eq '-') {
+            $safeName = 'myapp'
           }
-          "@
-          Set-Content -Path package.json -Value $pkg
+          # 连续多个 - 合并成一个
+          $safeName = $safeName -replace '-{2,}', '-'
+          $safeName = $safeName.Trim('-')
+
+          Write-Host "productName : $productName"
+          Write-Host "safeName    : $safeName"
+          Write-Host "version     : $version"
+
+          # 用 ConvertTo-Json 确保 productName 中文被正确转义
+          $config = [ordered]@{
+            name    = $safeName
+            version = $version
+            main    = "main.js"
+            build   = [ordered]@{
+              appId       = "com.webtoexe.$safeName"
+              productName = $productName
+              win         = [ordered]@{
+                target         = "portable"
+                executableName = $safeName
+              }
+            }
+            scripts = @{ dist = "electron-builder --win" }
+          }
+          $config | ConvertTo-Json -Depth 10 | Set-Content -Path package.json -Encoding UTF8
+          # 验证生成结果
+          Get-Content package.json
 
       - name: Build EXE
         shell: pwsh
+        env:
+          GH_TOKEN: ''
         run: |
-          npx electron-builder --win --x64
+          npx electron-builder --win --x64 --publish never
 
       - name: Upload EXE as artifact
         uses: actions/upload-artifact@v4
@@ -105,5 +124,6 @@ jobs:
       - name: Print artifact info
         shell: pwsh
         run: |
-          Write-Host "Task ID: ${{ inputs.task_id }}"
-          Write-Host "GitHub run id: ${{ github.run_id }}"
+          Write-Host "task_id  : ${{ inputs.task_id }}"
+          Write-Host "run_id   : ${{ github.run_id }}"
+          Get-ChildItem dist
