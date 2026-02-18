@@ -41,7 +41,8 @@ jobs:
         shell: pwsh
         run: |
           $targetUrl = '${{ inputs.url }}'
-          $main = @"
+          $escaped   = $targetUrl -replace "'", "''"
+          $main = @'
           const { app, BrowserWindow, Menu } = require('electron')
 
           app.whenReady().then(() => {
@@ -50,111 +51,113 @@ jobs:
             const win = new BrowserWindow({
               width: 1280,
               height: 800,
+              show: false,
               webPreferences: {
                 nodeIntegration: false,
                 contextIsolation: true,
               }
             })
 
-            win.webContents.on('did-start-loading', () => {
-              win.webContents.executeJavaScript(\`
-                (function() {
-                  if (document.getElementById('__pb__')) return
+            win.once('ready-to-show', () => win.show())
 
-                  const wrap = document.createElement('div')
-                  wrap.id = '__pb__'
-                  wrap.style.cssText = [
-                    'position:fixed','top:0','left:0',
-                    'width:100%','height:4px',
-                    'z-index:2147483647',
-                    'pointer-events:none',
-                    'background:transparent',
-                  ].join(';')
+            const pbCSS = `
+              #__pb_wrap__ {
+                position:fixed;top:0;left:0;width:100%;height:4px;
+                z-index:2147483647;pointer-events:none;
+              }
+              #__pb_bar__ {
+                height:4px;width:0%;
+                border-radius:0 4px 4px 0;
+                background:#3B82F6;
+                box-shadow:0 0 10px rgba(59,130,246,0.6);
+                transition:width 0.3s cubic-bezier(0.4,0,0.2,1);
+              }
+            `
 
-                  const bar = document.createElement('div')
-                  bar.id = '__pb_bar__'
-                  bar.style.cssText = [
-                    'height:4px',
-                    'width:0%',
-                    'border-radius:0 4px 4px 0',
-                    'background:#3B82F6',
-                    'box-shadow:0 0 10px rgba(59,130,246,0.6)',
-                    'transition:width 0.3s cubic-bezier(0.4,0,0.2,1),background 0.8s ease,box-shadow 0.8s ease',
-                  ].join(';')
+            const pbInitJS = `
+              (function() {
+                if (document.getElementById('__pb_wrap__')) return
+                const style = document.createElement('style')
+                style.textContent = ${JSON.stringify(pbCSS.replace(/`/g,''))}
+                document.head.appendChild(style)
+                const wrap = document.createElement('div')
+                wrap.id = '__pb_wrap__'
+                const bar = document.createElement('div')
+                bar.id = '__pb_bar__'
+                wrap.appendChild(bar)
+                document.body.appendChild(wrap)
+                let p = 0
+                window.__pbT__ = setInterval(() => {
+                  if (p < 85) {
+                    p += p < 30 ? Math.random()*6 : p < 60 ? Math.random()*3 : Math.random()*0.8
+                    p = Math.min(p, 85)
+                    bar.style.width = p + '%'
+                    const t = p/85
+                    const r = Math.round(59  + (34 -59 )*t)
+                    const g = Math.round(130 + (197-130)*t)
+                    const b = Math.round(246 + (94 -246)*t)
+                    bar.style.background = 'rgb('+r+','+g+','+b+')'
+                    bar.style.boxShadow  = '0 0 10px rgba('+r+','+g+','+b+',0.65)'
+                  }
+                }, 180)
+              })()
+            `
 
-                  wrap.appendChild(bar)
-                  document.documentElement.appendChild(wrap)
+            const pbDoneJS = `
+              (function() {
+                const bar = document.getElementById('__pb_bar__')
+                if (!bar) return
+                clearInterval(window.__pbT__)
+                bar.style.transition = 'width 0.25s ease,opacity 0.4s ease 0.35s'
+                bar.style.width = '100%'
+                bar.style.background = '#22C55E'
+                bar.style.boxShadow = '0 0 12px rgba(34,197,94,0.7)'
+                setTimeout(() => {
+                  bar.style.opacity = '0'
+                  setTimeout(() => {
+                    const w = document.getElementById('__pb_wrap__')
+                    if (w) w.remove()
+                  }, 450)
+                }, 350)
+              })()
+            `
 
-                  let progress = 0
-                  window.__pbTimer__ = setInterval(() => {
-                    if (progress < 85) {
-                      const step = progress < 30 ? 6 : progress < 60 ? 3 : 0.8
-                      progress += Math.random() * step
-                      progress = Math.min(progress, 85)
-                      bar.style.width = progress + '%'
-
-                      const blue  = [59, 130, 246]
-                      const green = [34, 197, 94]
-                      const t = Math.min(progress / 85, 1)
-                      const r = Math.round(blue[0] + (green[0]-blue[0]) * t)
-                      const g = Math.round(blue[1] + (green[1]-blue[1]) * t)
-                      const b = Math.round(blue[2] + (green[2]-blue[2]) * t)
-                      const color = 'rgb('+r+','+g+','+b+')'
-                      bar.style.background = color
-                      bar.style.boxShadow  = '0 0 10px rgba('+r+','+g+','+b+',0.65)'
-                    }
-                  }, 180)
-                })()
-              \`).catch(() => {})
-            })
+            const pbFailJS = `
+              (function() {
+                const bar = document.getElementById('__pb_bar__')
+                if (!bar) return
+                clearInterval(window.__pbT__)
+                bar.style.width = '100%'
+                bar.style.background = '#EF4444'
+                bar.style.boxShadow = '0 0 10px rgba(239,68,68,0.7)'
+                setTimeout(() => {
+                  bar.style.opacity = '0'
+                  setTimeout(() => {
+                    const w = document.getElementById('__pb_wrap__')
+                    if (w) w.remove()
+                  }, 450)
+                }, 900)
+              })()
+            `
 
             win.webContents.on('did-finish-load', () => {
-              win.webContents.executeJavaScript(\`
-                (function() {
-                  const bar = document.getElementById('__pb_bar__')
-                  if (!bar) return
-                  clearInterval(window.__pbTimer__)
-                  bar.style.transition = 'width 0.25s ease,background 0.3s ease,box-shadow 0.3s ease,opacity 0.4s ease 0.35s'
-                  bar.style.width      = '100%'
-                  bar.style.background = '#22C55E'
-                  bar.style.boxShadow  = '0 0 12px rgba(34,197,94,0.7)'
-                  setTimeout(() => {
-                    bar.style.opacity = '0'
-                    setTimeout(() => {
-                      const wrap = document.getElementById('__pb__')
-                      if (wrap) wrap.remove()
-                    }, 450)
-                  }, 350)
-                })()
-              \`).catch(() => {})
+              win.webContents.executeJavaScript(pbInitJS).catch(() => {})
+              setTimeout(() => {
+                win.webContents.executeJavaScript(pbDoneJS).catch(() => {})
+              }, 300)
             })
 
             win.webContents.on('did-fail-load', () => {
-              win.webContents.executeJavaScript(\`
-                (function() {
-                  const bar = document.getElementById('__pb_bar__')
-                  if (!bar) return
-                  clearInterval(window.__pbTimer__)
-                  bar.style.transition = 'width 0.2s ease,background 0.2s ease,opacity 0.4s ease 0.8s'
-                  bar.style.width      = '100%'
-                  bar.style.background = '#EF4444'
-                  bar.style.boxShadow  = '0 0 10px rgba(239,68,68,0.7)'
-                  setTimeout(() => {
-                    bar.style.opacity = '0'
-                    setTimeout(() => {
-                      const wrap = document.getElementById('__pb__')
-                      if (wrap) wrap.remove()
-                    }, 450)
-                  }, 900)
-                })()
-              \`).catch(() => {})
+              win.webContents.executeJavaScript(pbFailJS).catch(() => {})
             })
 
-            win.loadURL('$targetUrl')
+            win.loadURL('TARGET_URL_PLACEHOLDER')
           })
 
           app.on('window-all-closed', () => app.quit())
-          "@
+          '@
+
+          $main = $main -replace 'TARGET_URL_PLACEHOLDER', $escaped
           Set-Content -Path main.js -Value $main -Encoding UTF8
 
       - name: Download custom icon
@@ -185,20 +188,12 @@ jobs:
           $productName = '${{ inputs.app_name }}'
           $rawVersion  = '${{ inputs.version }}'
 
-          # 去掉开头的 v/V
           $rawVersion = $rawVersion -replace '^[vV]+', ''
-          # 只保留数字和点
           $rawVersion = $rawVersion -replace '[^0-9.]', ''
-          # 去掉首尾的点
           $rawVersion = $rawVersion.Trim('.')
-          # 用 [char]'.' 分割，避免转义问题
           $parts = $rawVersion.Split([char]'.') | Where-Object { $_ -ne '' }
-          # 补全到三段
           while ($parts.Count -lt 3) { $parts += @('0') }
           $version = $parts[0] + '.' + $parts[1] + '.' + $parts[2]
-
-          Write-Host "原始版本号: $rawVersion"
-          Write-Host "修正版本号: $version"
 
           $safeName = $productName -replace '[^a-zA-Z0-9\-]', '-'
           $safeName = $safeName.ToLower().Trim('-')
@@ -207,9 +202,6 @@ jobs:
           }
           $safeName = $safeName -replace '-{2,}', '-'
           $safeName = $safeName.Trim('-')
-
-          Write-Host "productName: $productName"
-          Write-Host "safeName   : $safeName"
 
           $json = @"
           {
